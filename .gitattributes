@@ -1,0 +1,12 @@
+# Normalize line endings to LF for text files
+* text=auto
+
+# Force LF for specific file types
+*.cs text eol=lf
+*.json text eol=lf
+*.rsp text eol=lf
+
+# Binary files should not be normalized
+*.png binary
+*.jpg binary
+*.dll binary
