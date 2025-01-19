@@ -34,6 +34,11 @@ public class Rope : MonoBehaviour
     [SerializeField]
     private float airFriction;
 
+    [SerializeField]
+    private GameObject sphere;
+
+    private SphereData sphere_data;
+
     void Start()
     {
         // Initialize LineRenderer
@@ -42,6 +47,8 @@ public class Rope : MonoBehaviour
         lineRenderer.material.color = Color.red;
         lineRenderer.startWidth = 0.1f;
         lineRenderer.endWidth = 0.1f;
+
+        sphere_data = GetSphereData(sphere);
 
         // Generate rope points and constraints
         InstantiateSections(numPoints);
@@ -54,6 +61,7 @@ public class Rope : MonoBehaviour
 
     void Update()
     {
+        sphere_data = GetSphereData(sphere);
         Simulate();
         UpdateLineRenderer();
     }
@@ -103,7 +111,12 @@ public class Rope : MonoBehaviour
             {
                 Vector3 velocity = (p.getPosition() - p.getPreviousPosition()) * airFriction;
                 Vector3 positionBeforeUpdate = p.getPosition();
-                p.setPosition(p.getPosition() + velocity + Vector3.down * gravity * Time.deltaTime * Time.deltaTime);
+                Vector3 newPosition = positionBeforeUpdate + velocity + Vector3.down * gravity * Time.deltaTime * Time.deltaTime;
+                if (IsCollidingWithSphere(newPosition, sphere_data.center, sphere_data.radius))
+                {
+                    ResolveSphereCollision(ref newPosition, sphere_data.center, sphere_data.radius);
+                }
+                p.setPosition(newPosition);
                 p.setPreviousPosition(positionBeforeUpdate);
             }
             else
@@ -165,4 +178,53 @@ public class Rope : MonoBehaviour
         lineRenderer.positionCount = pointPositions.Count; //linerenderer is faster if i just store them all in array like this, seems dumb but its good.
         lineRenderer.SetPositions(pointPositions.ToArray());
     }
+
+
+
+    bool IsCollidingWithSphere(Vector3 pointPosition, Vector3 sphereCenter, float sphereRadius)
+    {
+        float distance = Vector3.Distance(pointPosition, sphereCenter);
+        return distance < sphereRadius;
+    }
+
+    void ResolveSphereCollision(ref Vector3 pointPosition, Vector3 sphereCenter, float sphereRadius)
+    {
+        Vector3 direction = (pointPosition - sphereCenter).normalized;
+        pointPosition = sphereCenter + direction * sphereRadius;
+    }
+
+    class SphereData
+    {
+        public Vector3 center;
+        public float radius;
+
+        public SphereData(Vector3 center, float radius)
+        {
+            this.center = center;
+            this.radius = radius;
+        }
+    }
+
+    SphereData GetSphereData(GameObject obj)
+    {
+        SphereCollider collider = obj.GetComponent<SphereCollider>();
+        if (collider == null)
+        {
+            Debug.LogError($"GameObject {obj.name} does not have a SphereCollider!");
+            return null;
+        }
+
+        // Get the world-space center of the sphere
+        Vector3 worldCenter = obj.transform.TransformPoint(collider.center);
+
+        // Get the world-space radius (considering scale)
+        float worldRadius = collider.radius * Mathf.Max(
+            obj.transform.lossyScale.x,
+            obj.transform.lossyScale.y,
+            obj.transform.lossyScale.z
+        );
+
+        return new SphereData(worldCenter, worldRadius);
+    }
+
 }
