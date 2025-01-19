@@ -48,6 +48,8 @@ public class Rope : MonoBehaviour
 
         // Set LineRenderer positions
         UpdateLineRenderer();
+
+        Debug.Log("HELLO!!");
     }
 
     void Update()
