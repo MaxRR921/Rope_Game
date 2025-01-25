@@ -34,10 +34,16 @@ public class Rope : MonoBehaviour
     [SerializeField]
     private float airFriction;
 
-    [SerializeField]
-    private GameObject sphere;
 
-    private SphereData sphere_data;
+    [SerializeField]
+    private List<BoxCollider> boxColliders = new List<BoxCollider>();
+
+    [SerializeField]
+    private List<SphereCollider> sphereColliders = new List<SphereCollider>();
+
+    private List<AABB> aABBs = new List<AABB>();
+
+    private List<Sphere> spheres = new List<Sphere>();
 
     void Start()
     {
@@ -48,7 +54,16 @@ public class Rope : MonoBehaviour
         lineRenderer.startWidth = 0.1f;
         lineRenderer.endWidth = 0.1f;
 
-        sphere_data = GetSphereData(sphere);
+        foreach (BoxCollider collider in boxColliders)
+        {
+            aABBs.Add(new AABB(collider));
+        }
+
+        foreach(SphereCollider sphereCollider in sphereColliders)
+        {
+            spheres.Add(new Sphere(sphereCollider));
+        }
+
 
         // Generate rope points and constraints
         InstantiateSections(numPoints);
@@ -61,7 +76,6 @@ public class Rope : MonoBehaviour
 
     void Update()
     {
-        sphere_data = GetSphereData(sphere);
         Simulate();
         UpdateLineRenderer();
     }
@@ -112,10 +126,23 @@ public class Rope : MonoBehaviour
                 Vector3 velocity = (p.getPosition() - p.getPreviousPosition()) * airFriction;
                 Vector3 positionBeforeUpdate = p.getPosition();
                 Vector3 newPosition = positionBeforeUpdate + velocity + Vector3.down * gravity * Time.deltaTime * Time.deltaTime;
-                if (IsCollidingWithSphere(newPosition, sphere_data.center, sphere_data.radius))
+
+                foreach(Sphere sphere_data in spheres)
                 {
-                    ResolveSphereCollision(ref newPosition, sphere_data.center, sphere_data.radius);
+                    if (IsCollidingWithSphere(newPosition, sphere_data.center, sphere_data.radius))
+                    {
+                        ResolveSphereCollision(ref newPosition, sphere_data.center, sphere_data.radius);
+                    }
                 }
+
+                foreach(AABB aABB in aABBs)
+                {
+                    if(IsCollidingWithAABB(newPosition, aABB.min, aABB.max))
+                    {
+                        ResolveAABBCollision(ref newPosition, aABB.min, aABB.max);
+                    }
+                }
+
                 p.setPosition(newPosition);
                 p.setPreviousPosition(positionBeforeUpdate);
             }
@@ -186,6 +213,13 @@ public class Rope : MonoBehaviour
         float distance = Vector3.Distance(pointPosition, sphereCenter);
         return distance < sphereRadius;
     }
+    bool IsCollidingWithAABB(Vector3 pointPosition, Vector3 aabbMin, Vector3 aabbMax)
+    {
+        return pointPosition.x >= aabbMin.x && pointPosition.x <= aabbMax.x &&
+               pointPosition.y >= aabbMin.y && pointPosition.y <= aabbMax.y &&
+               pointPosition.z >= aabbMin.z && pointPosition.z <= aabbMax.z;
+    }
+
 
     void ResolveSphereCollision(ref Vector3 pointPosition, Vector3 sphereCenter, float sphereRadius)
     {
@@ -193,38 +227,65 @@ public class Rope : MonoBehaviour
         pointPosition = sphereCenter + direction * sphereRadius;
     }
 
-    class SphereData
+    void ResolveAABBCollision(ref Vector3 pointPosition, Vector3 aabbMin, Vector3 aabbMax)
+    {
+        // Calculate distances to each face of the AABB
+        float distToMinX = Mathf.Abs(pointPosition.x - aabbMin.x);
+        float distToMaxX = Mathf.Abs(pointPosition.x - aabbMax.x);
+        float distToMinY = Mathf.Abs(pointPosition.y - aabbMin.y);
+        float distToMaxY = Mathf.Abs(pointPosition.y - aabbMax.y);
+        float distToMinZ = Mathf.Abs(pointPosition.z - aabbMin.z);
+        float distToMaxZ = Mathf.Abs(pointPosition.z - aabbMax.z);
+
+        // Find the smallest distance
+        float minDist = Mathf.Min(distToMinX, distToMaxX, distToMinY, distToMaxY, distToMinZ, distToMaxZ);
+
+        // Push the point to the closest face
+        if (minDist == distToMinX) pointPosition.x = aabbMin.x;
+        else if (minDist == distToMaxX) pointPosition.x = aabbMax.x;
+        else if (minDist == distToMinY) pointPosition.y = aabbMin.y;
+        else if (minDist == distToMaxY) pointPosition.y = aabbMax.y;
+        else if (minDist == distToMinZ) pointPosition.z = aabbMin.z;
+        else if (minDist == distToMaxZ) pointPosition.z = aabbMax.z;
+    }
+
+
+    class Sphere
     {
         public Vector3 center;
         public float radius;
 
-        public SphereData(Vector3 center, float radius)
+        public Sphere(SphereCollider c)
         {
-            this.center = center;
-            this.radius = radius;
+            SphereCollider collider = c; 
+            if (collider == null)
+            {
+                Debug.LogError($"GameObject {c.name} does not have a SphereCollider!");
+            }
+
+            // Get the world-space center of the sphere
+            center = collider.transform.TransformPoint(collider.center);
+
+            // Get the world-space radius (considering scale)
+            radius = collider.radius * Mathf.Max(
+                collider.transform.lossyScale.x,
+                collider.transform.lossyScale.y,
+                collider.transform.lossyScale.z
+            );
         }
     }
 
-    SphereData GetSphereData(GameObject obj)
+    class AABB
     {
-        SphereCollider collider = obj.GetComponent<SphereCollider>();
-        if (collider == null)
+        public Vector3 min;
+        public Vector3 max;
+
+        public AABB(BoxCollider collider)
         {
-            Debug.LogError($"GameObject {obj.name} does not have a SphereCollider!");
-            return null;
+            // Calculate bounds in world space
+            Bounds bounds = collider.bounds;
+            min = bounds.min;
+            max = bounds.max;
         }
-
-        // Get the world-space center of the sphere
-        Vector3 worldCenter = obj.transform.TransformPoint(collider.center);
-
-        // Get the world-space radius (considering scale)
-        float worldRadius = collider.radius * Mathf.Max(
-            obj.transform.lossyScale.x,
-            obj.transform.lossyScale.y,
-            obj.transform.lossyScale.z
-        );
-
-        return new SphereData(worldCenter, worldRadius);
     }
-
 }
