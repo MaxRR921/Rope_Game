@@ -86,19 +86,40 @@ public class Rope : MonoBehaviour
         private Vector3 m_position;
         private Vector3 m_previous_position;
         private bool m_fix;
+        private float m_friction;
+        private bool m_is_colliding_AABB;
+        private int m_collide_count_AABB; //Counts number of frames the rope has been colliding with something for.
+        private bool m_is_colliding_sphere;
+        private int m_collide_count_sphere; //Counts number of frames the rope has been colliding with something for.
 
         public Point(Vector3 position, Vector3 previous_position, bool fix)
         {
             m_position = position;
             m_previous_position = previous_position;
             m_fix = fix;
+            m_friction = 0.0f;
+            m_is_colliding_AABB = false;
+            m_collide_count_AABB = 0;
+            m_is_colliding_sphere = false;
+            m_collide_count_sphere = 0;
         }
-
         public Vector3 getPosition() => m_position;
         public Vector3 getPreviousPosition() => m_previous_position;
         public bool isFix() => m_fix;
         public void setPosition(Vector3 position) => m_position = position;
         public void setPreviousPosition(Vector3 position) => m_previous_position = position;
+        public void setFriction(float friction) => m_friction = friction;
+        public float getFriction() => m_friction;
+        public bool isCollidingAABB () => m_is_colliding_AABB;
+        public void setIsCollidingAABB(bool colliding) => m_is_colliding_AABB = colliding; 
+        public bool isCollidingSphere () => m_is_colliding_sphere;
+        public void setIsCollidingSphere(bool colliding) => m_is_colliding_sphere = colliding; 
+        public int getCollideCountAABB() => m_collide_count_AABB;
+        public void setCollideCountAABB(int collide_count)=> m_collide_count_AABB = collide_count;
+        public int getCollideCountSphere() => m_collide_count_sphere;
+        public void setCollideCountSphere(int collide_count)=> m_collide_count_sphere = collide_count;
+        
+
     }
 
     [System.Serializable]
@@ -123,15 +144,40 @@ public class Rope : MonoBehaviour
         {
             if (!p.isFix())
             {
-                Vector3 velocity = (p.getPosition() - p.getPreviousPosition()) * airFriction;
+                Vector3 velocity = (p.getPosition() - p.getPreviousPosition()) * airFriction * p.getFriction();
                 Vector3 positionBeforeUpdate = p.getPosition();
                 Vector3 newPosition = positionBeforeUpdate + velocity + Vector3.down * gravity * Time.deltaTime * Time.deltaTime;
+
+
+                p.setFriction(1.0f);
 
                 foreach(Sphere sphere_data in spheres)
                 {
                     if (IsCollidingWithSphere(newPosition, sphere_data.center, sphere_data.radius))
                     {
+                        if (!p.isCollidingSphere())
+                        {
+                            p.setIsCollidingSphere(true);
+                            p.setCollideCountSphere(1);
+                        }
+                        else
+                        {
+                            p.setCollideCountSphere(p.getCollideCountSphere() + 1);
+                        }
+                        if (p.getFriction() > 0.4f)
+                        {
+                            p.setFriction(0.99f - (.001f * p.getCollideCountAABB()));
+                        }
+                        else
+                        {
+                            p.setFriction(0.99f);
+                        }
+                        
                         ResolveSphereCollision(ref newPosition, sphere_data.center, sphere_data.radius);
+                    }
+                    else
+                    {
+                        p.setIsCollidingSphere(false);
                     }
                 }
 
@@ -139,9 +185,31 @@ public class Rope : MonoBehaviour
                 {
                     if(IsCollidingWithAABB(newPosition, aABB.min, aABB.max))
                     {
+                        if (!p.isCollidingAABB())
+                        {
+                            p.setIsCollidingAABB(true);
+                            p.setCollideCountAABB(1);
+                        }
+                        else
+                        {
+                            p.setCollideCountAABB(p.getCollideCountAABB() + 1);
+                        }
+                        if (p.getFriction() > 0.4f)
+                        {
+                            p.setFriction(0.99f - (.001f * p.getCollideCountAABB()));
+                        }
+                        else
+                        {
+                            p.setFriction(0.99f);
+                        }
                         ResolveAABBCollision(ref newPosition, aABB.min, aABB.max);
                     }
+                    else
+                    {
+                        p.setIsCollidingAABB(false);
+                    }
                 }
+
 
                 p.setPosition(newPosition);
                 p.setPreviousPosition(positionBeforeUpdate);
@@ -237,6 +305,7 @@ public class Rope : MonoBehaviour
         float distToMinZ = Mathf.Abs(pointPosition.z - aabbMin.z);
         float distToMaxZ = Mathf.Abs(pointPosition.z - aabbMax.z);
 
+        
         // Find the smallest distance
         float minDist = Mathf.Min(distToMinX, distToMaxX, distToMinY, distToMaxY, distToMinZ, distToMaxZ);
 
