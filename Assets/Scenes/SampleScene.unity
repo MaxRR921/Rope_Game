@@ -1122,9 +1122,8 @@ MonoBehaviour:
   points: []
   constraints: []
   gravity: 10
-  numPoints: 91
+  numPoints: 50
   length: 10
-  frequency: 61.1
   start_position: {x: 0, y: 0, z: 0}
   lineRenderer: {fileID: 1976683656}
   obj_pinned_to: {fileID: 161445016}

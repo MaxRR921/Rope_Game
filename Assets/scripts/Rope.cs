@@ -1,5 +1,6 @@
-using System.Collections.Generic;
+﻿using System.Collections.Generic;
 using UnityEngine;
+using UnityEngine.Rendering;
 
 public class Rope : MonoBehaviour
 {
@@ -18,9 +19,6 @@ public class Rope : MonoBehaviour
     private float length;
 
     [SerializeField]
-    private float frequency;
-
-    [SerializeField]
     private Vector3 start_position;
 
     private List<Vector3> pointPositions = new List<Vector3>();
@@ -34,37 +32,36 @@ public class Rope : MonoBehaviour
     [SerializeField]
     private float airFriction;
 
+    [SerializeField]
+    private List<Collider> collisionColliders = new List<Collider>();
 
     [SerializeField]
-    private List<BoxCollider> boxColliders = new List<BoxCollider>();
-
-    [SerializeField]
-    private List<SphereCollider> sphereColliders = new List<SphereCollider>();
-
-    private List<AABB> aABBs = new List<AABB>();
-
-    private List<Sphere> spheres = new List<Sphere>();
+    private float ropeThickness = 0.1f;
 
     void Start()
     {
         // Initialize LineRenderer
-        lineRenderer = gameObject.GetComponent<LineRenderer>() ?? gameObject.AddComponent<LineRenderer>();
-        lineRenderer.material = new Material(Shader.Find("Unlit/Color"));
-        lineRenderer.material.color = Color.red;
-        lineRenderer.startWidth = 0.1f;
-        lineRenderer.endWidth = 0.1f;
+        // grab or add the LineRenderer
+        lineRenderer = lineRenderer ?? gameObject.AddComponent<LineRenderer>();
+        lineRenderer.alignment = LineAlignment.TransformZ;
+        lineRenderer.generateLightingData = true;    // gives it normals/tangents for proper lighting
+        lineRenderer.shadowCastingMode = ShadowCastingMode.On;
+        lineRenderer.receiveShadows = true;
 
-        foreach (BoxCollider collider in boxColliders)
-        {
-            aABBs.Add(new AABB(collider));
-        }
+        // 1) Create a URP Lit material and set it Opaque
+        var mat = new Material(Shader.Find("Universal Render Pipeline/Lit"));
+        mat.SetFloat("_Surface", 0);          // 0 = Opaque, 1 = Transparent
+        mat.color = Color.blue;               // your rope color
 
-        foreach(SphereCollider sphereCollider in sphereColliders)
-        {
-            spheres.Add(new Sphere(sphereCollider));
-        }
+        // 2) Assign it
+        lineRenderer.material = mat;
 
+        // 3) Make sure it has real thickness
+        lineRenderer.startWidth = lineRenderer.endWidth = 0.1f;
 
+        // 4) Enable shadows
+        lineRenderer.shadowCastingMode = ShadowCastingMode.On;
+        lineRenderer.receiveShadows = true;
         // Generate rope points and constraints
         InstantiateSections(numPoints);
 
@@ -89,8 +86,8 @@ public class Rope : MonoBehaviour
         private float m_friction;
         private bool m_is_colliding_AABB;
         private int m_collide_count_AABB; //Counts number of frames the rope has been colliding with something for.
-        private bool m_is_colliding_sphere;
-        private int m_collide_count_sphere; //Counts number of frames the rope has been colliding with something for.
+        private bool m_is_colliding;
+        private int m_collide_count; //Counts number of frames the rope has been colliding with something for.
 
         public Point(Vector3 position, Vector3 previous_position, bool fix)
         {
@@ -100,8 +97,8 @@ public class Rope : MonoBehaviour
             m_friction = 0.0f;
             m_is_colliding_AABB = false;
             m_collide_count_AABB = 0;
-            m_is_colliding_sphere = false;
-            m_collide_count_sphere = 0;
+            m_is_colliding = false;
+            m_collide_count = 0;
         }
         public Vector3 getPosition() => m_position;
         public Vector3 getPreviousPosition() => m_previous_position;
@@ -110,15 +107,10 @@ public class Rope : MonoBehaviour
         public void setPreviousPosition(Vector3 position) => m_previous_position = position;
         public void setFriction(float friction) => m_friction = friction;
         public float getFriction() => m_friction;
-        public bool isCollidingAABB () => m_is_colliding_AABB;
-        public void setIsCollidingAABB(bool colliding) => m_is_colliding_AABB = colliding; 
-        public bool isCollidingSphere () => m_is_colliding_sphere;
-        public void setIsCollidingSphere(bool colliding) => m_is_colliding_sphere = colliding; 
-        public int getCollideCountAABB() => m_collide_count_AABB;
-        public void setCollideCountAABB(int collide_count)=> m_collide_count_AABB = collide_count;
-        public int getCollideCountSphere() => m_collide_count_sphere;
-        public void setCollideCountSphere(int collide_count)=> m_collide_count_sphere = collide_count;
-        
+        public bool isColliding () => m_is_colliding;
+        public void setIsColliding(bool colliding) => m_is_colliding = colliding; 
+        public int getCollideCount() => m_collide_count;
+        public void setCollideCount(int collide_count)=> m_collide_count = collide_count;
 
     }
 
@@ -151,65 +143,46 @@ public class Rope : MonoBehaviour
 
                 p.setFriction(1.0f);
 
-                foreach(Sphere sphere_data in spheres)
+
+                // for every collider in your inspector list:
+                foreach (var col in collisionColliders)
                 {
-                    if (IsCollidingWithSphere(newPosition, sphere_data.center, sphere_data.radius))
+                    // 1) find closest point on that collider’s surface
+                    Vector3 closest = col.ClosestPoint(newPosition);
+                    Vector3 delta = newPosition - closest;
+                    float dist = delta.magnitude;
+
+                    // 2) are we overlapping? (tube of radius ropeThickness)
+                    bool colliding = dist < ropeThickness;
+
+                    if (colliding)
                     {
-                        if (!p.isCollidingSphere())
+                        // first‐frame vs continuing collision
+                        if (!p.isColliding())
                         {
-                            p.setIsCollidingSphere(true);
-                            p.setCollideCountSphere(1);
+                            p.setIsColliding(true);
+                            p.setCollideCount(1);
                         }
                         else
                         {
-                            p.setCollideCountSphere(p.getCollideCountSphere() + 1);
+                            p.setCollideCount(p.getCollideCount() + 1);
                         }
-                        if (p.getFriction() > 0.4f)
-                        {
-                            p.setFriction(0.99f - (.001f * p.getCollideCountAABB()));
-                        }
-                        else
-                        {
-                            p.setFriction(0.99f);
-                        }
-                        
-                        ResolveSphereCollision(ref newPosition, sphere_data.center, sphere_data.radius);
+
+                        // exactly the same friction formula you used
+                        float newFric = p.getFriction() > 0.4f
+                            ? 0.99f - (0.001f * p.getCollideCount())
+                            : 0.99f;
+                        p.setFriction(newFric);
+
+                        // 3) push the point out to the surface + thickness
+                        Vector3 normal = delta / dist;
+                        newPosition = closest + normal * ropeThickness;
                     }
                     else
                     {
-                        p.setIsCollidingSphere(false);
+                        p.setIsColliding(false);
                     }
                 }
-
-                foreach(AABB aABB in aABBs)
-                {
-                    if(IsCollidingWithAABB(newPosition, aABB.min, aABB.max))
-                    {
-                        if (!p.isCollidingAABB())
-                        {
-                            p.setIsCollidingAABB(true);
-                            p.setCollideCountAABB(1);
-                        }
-                        else
-                        {
-                            p.setCollideCountAABB(p.getCollideCountAABB() + 1);
-                        }
-                        if (p.getFriction() > 0.4f)
-                        {
-                            p.setFriction(0.99f - (.001f * p.getCollideCountAABB()));
-                        }
-                        else
-                        {
-                            p.setFriction(0.99f);
-                        }
-                        ResolveAABBCollision(ref newPosition, aABB.min, aABB.max);
-                    }
-                    else
-                    {
-                        p.setIsCollidingAABB(false);
-                    }
-                }
-
 
                 p.setPosition(newPosition);
                 p.setPreviousPosition(positionBeforeUpdate);
@@ -244,7 +217,7 @@ public class Rope : MonoBehaviour
 
     private void InstantiateSections(int numPoints)
     {
-        Vector3 distance_y = new Vector3(0, length / frequency, 0);
+        Vector3 distance_y = new Vector3(0, length / numPoints, 0);
         Point last_point = null;
 
         for (int i = 0; i < numPoints; i++)
@@ -274,87 +247,4 @@ public class Rope : MonoBehaviour
         lineRenderer.SetPositions(pointPositions.ToArray());
     }
 
-
-
-    bool IsCollidingWithSphere(Vector3 pointPosition, Vector3 sphereCenter, float sphereRadius)
-    {
-        float distance = Vector3.Distance(pointPosition, sphereCenter);
-        return distance < sphereRadius;
-    }
-    bool IsCollidingWithAABB(Vector3 pointPosition, Vector3 aabbMin, Vector3 aabbMax)
-    {
-        return pointPosition.x >= aabbMin.x && pointPosition.x <= aabbMax.x &&
-               pointPosition.y >= aabbMin.y && pointPosition.y <= aabbMax.y &&
-               pointPosition.z >= aabbMin.z && pointPosition.z <= aabbMax.z;
-    }
-
-
-    void ResolveSphereCollision(ref Vector3 pointPosition, Vector3 sphereCenter, float sphereRadius)
-    {
-        Vector3 direction = (pointPosition - sphereCenter).normalized;
-        pointPosition = sphereCenter + direction * sphereRadius;
-    }
-
-    void ResolveAABBCollision(ref Vector3 pointPosition, Vector3 aabbMin, Vector3 aabbMax)
-    {
-        // Calculate distances to each face of the AABB
-        float distToMinX = Mathf.Abs(pointPosition.x - aabbMin.x);
-        float distToMaxX = Mathf.Abs(pointPosition.x - aabbMax.x);
-        float distToMinY = Mathf.Abs(pointPosition.y - aabbMin.y);
-        float distToMaxY = Mathf.Abs(pointPosition.y - aabbMax.y);
-        float distToMinZ = Mathf.Abs(pointPosition.z - aabbMin.z);
-        float distToMaxZ = Mathf.Abs(pointPosition.z - aabbMax.z);
-
-        
-        // Find the smallest distance
-        float minDist = Mathf.Min(distToMinX, distToMaxX, distToMinY, distToMaxY, distToMinZ, distToMaxZ);
-
-        // Push the point to the closest face
-        if (minDist == distToMinX) pointPosition.x = aabbMin.x;
-        else if (minDist == distToMaxX) pointPosition.x = aabbMax.x;
-        else if (minDist == distToMinY) pointPosition.y = aabbMin.y;
-        else if (minDist == distToMaxY) pointPosition.y = aabbMax.y;
-        else if (minDist == distToMinZ) pointPosition.z = aabbMin.z;
-        else if (minDist == distToMaxZ) pointPosition.z = aabbMax.z;
-    }
-
-
-    class Sphere
-    {
-        public Vector3 center;
-        public float radius;
-
-        public Sphere(SphereCollider c)
-        {
-            SphereCollider collider = c; 
-            if (collider == null)
-            {
-                Debug.LogError($"GameObject {c.name} does not have a SphereCollider!");
-            }
-
-            // Get the world-space center of the sphere
-            center = collider.transform.TransformPoint(collider.center);
-
-            // Get the world-space radius (considering scale)
-            radius = collider.radius * Mathf.Max(
-                collider.transform.lossyScale.x,
-                collider.transform.lossyScale.y,
-                collider.transform.lossyScale.z
-            );
-        }
-    }
-
-    class AABB
-    {
-        public Vector3 min;
-        public Vector3 max;
-
-        public AABB(BoxCollider collider)
-        {
-            // Calculate bounds in world space
-            Bounds bounds = collider.bounds;
-            min = bounds.min;
-            max = bounds.max;
-        }
-    }
 }
