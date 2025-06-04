@@ -12,6 +12,8 @@ public class Rope : MonoBehaviour
     [SerializeField]
     private float gravity = 10f;
 
+    private bool has_been_cut = false;
+
     [SerializeField]
     private int numPoints = 10;
 
@@ -27,9 +29,6 @@ public class Rope : MonoBehaviour
     private LineRenderer lineRenderer;
 
     [SerializeField]
-    private GameObject obj_pinned_to;
-
-    [SerializeField]
     private float airFriction;
 
     [SerializeField]
@@ -38,12 +37,17 @@ public class Rope : MonoBehaviour
     [SerializeField]
     private float ropeThickness = 0.1f;
 
+    [SerializeField]
+    private List<Rope> child_ropes = new List<Rope>();
+
+    [SerializeField]
+    private List<PinnableObject> pinnableObjects = new List<PinnableObject>();
+
     void Start()
     {
         // Initialize LineRenderer
         // grab or add the LineRenderer
         lineRenderer = lineRenderer ?? gameObject.AddComponent<LineRenderer>();
-        lineRenderer.alignment = LineAlignment.TransformZ;
         lineRenderer.generateLightingData = true;    // gives it normals/tangents for proper lighting
         lineRenderer.shadowCastingMode = ShadowCastingMode.On;
         lineRenderer.receiveShadows = true;
@@ -60,8 +64,6 @@ public class Rope : MonoBehaviour
         lineRenderer.startWidth = lineRenderer.endWidth = 0.1f;
 
         // 4) Enable shadows
-        lineRenderer.shadowCastingMode = ShadowCastingMode.On;
-        lineRenderer.receiveShadows = true;
         // Generate rope points and constraints
         InstantiateSections(numPoints);
 
@@ -80,6 +82,7 @@ public class Rope : MonoBehaviour
     [System.Serializable]
     class Point
     {
+        private int m_pid;
         private Vector3 m_position;
         private Vector3 m_previous_position;
         private bool m_fix;
@@ -88,9 +91,11 @@ public class Rope : MonoBehaviour
         private int m_collide_count_AABB; //Counts number of frames the rope has been colliding with something for.
         private bool m_is_colliding;
         private int m_collide_count; //Counts number of frames the rope has been colliding with something for.
+        private PinnableObject m_object_pinned_to;
 
-        public Point(Vector3 position, Vector3 previous_position, bool fix)
+        public Point(int pid, Vector3 position, Vector3 previous_position, bool fix)
         {
+            m_pid = pid;
             m_position = position;
             m_previous_position = previous_position;
             m_fix = fix;
@@ -99,10 +104,17 @@ public class Rope : MonoBehaviour
             m_collide_count_AABB = 0;
             m_is_colliding = false;
             m_collide_count = 0;
+            m_object_pinned_to = null;
+
         }
         public Vector3 getPosition() => m_position;
+        public PinnableObject getObjectPinnedTo => m_object_pinned_to;
+        public void setObjectPinnedTo(PinnableObject object_pinned_to) => m_object_pinned_to = object_pinned_to; 
+        public int getPid() => m_pid;
+        public void setPid(int pid) => m_pid = pid;
         public Vector3 getPreviousPosition() => m_previous_position;
         public bool isFix() => m_fix;
+        public void Fix(bool fix) => m_fix = fix;  
         public void setPosition(Vector3 position) => m_position = position;
         public void setPreviousPosition(Vector3 position) => m_previous_position = position;
         public void setFriction(float friction) => m_friction = friction;
@@ -127,6 +139,23 @@ public class Rope : MonoBehaviour
             m_pointB = pointB;
             m_length = Vector3.Distance(pointA.getPosition(), pointB.getPosition());
         }
+    }
+
+    [System.Serializable]
+    class PinnableObject
+    {
+        [SerializeField]
+        private GameObject m_gameObject;
+        [SerializeField]
+        private int id;
+
+        public PinnableObject(int pid, GameObject obj)
+        {
+            m_gameObject = obj;
+            id = pid;
+        }
+        public int getId() => id;
+        public GameObject getGameObject => m_gameObject;
     }
 
     private void Simulate()
@@ -178,6 +207,28 @@ public class Rope : MonoBehaviour
                         Vector3 normal = delta / dist;
                         newPosition = closest + normal * ropeThickness;
                     }
+
+                    // — inside the foreach (var col in collisionColliders) —
+                    if (!has_been_cut && colliding && col.CompareTag("Cutter"))
+                    {
+                        has_been_cut = true;
+
+                        // 1. drop the cutter from every rope’s query list
+                        collisionColliders.Remove(col);
+
+                        // 2. do the split
+                        int cutIndex = points.IndexOf(p);
+                        DecoupleAt(cutIndex);
+
+                        // optional: turn the cutter off so it’s invisible/inactive
+                        col.enabled = false;
+
+                        Debug.Log($"Decoupled rope at index {cutIndex}");
+
+                        // 3. stop processing this frame ⇒ prevents extra child spawns
+                        return;
+                    }
+
                     else
                     {
                         p.setIsColliding(false);
@@ -189,9 +240,14 @@ public class Rope : MonoBehaviour
             }
             else
             {
-                p.setPosition(obj_pinned_to.transform.position);
+                if (p.getObjectPinnedTo != null)
+                {
+                    p.setPosition(p.getObjectPinnedTo.getGameObject.transform.position);
+                }
             }
         }
+        
+
 
         // Satisfy constraints
         for (int i = 0; i < 5; i++)
@@ -215,6 +271,66 @@ public class Rope : MonoBehaviour
         }
     }
 
+
+    private void DecoupleAt(int index)
+    {
+        // sanity check
+        if (index < 0 || index >= points.Count - 1) return;
+
+        // ----- upper segment (this Rope) -----
+        // keep points [0 .. index]  (inclusive)
+        List<Point> lowerPoints = points.GetRange(index + 1, points.Count - (index + 1));
+        points.RemoveRange(index + 1, points.Count - (index + 1));
+
+        // ditch every constraint that references a removed point
+        constraints.RemoveAll(c => !points.Contains(c.m_pointA) || !points.Contains(c.m_pointB));
+
+        // refresh this renderer so it ends exactly at the cut point
+        UpdateLineRenderer();
+
+        // ----- lower segment (new Rope) -----
+        SpawnChildSegment(lowerPoints);
+    }
+
+    private void SpawnChildSegment(List<Point> segmentPoints)
+    {
+        // create a new GameObject for the dangling part
+        GameObject child = new GameObject("RopeSegment");
+        child.transform.parent = transform.parent;               // keep hierarchy tidy
+        child.transform.position = Vector3.zero;                 // local positions are already baked into the points
+
+        Rope r = child.AddComponent<Rope>();
+
+        // ---------------- copy simple fields ----------------
+        r.gravity = gravity;
+        r.airFriction = airFriction;
+        r.ropeThickness = ropeThickness;
+        r.collisionColliders = collisionColliders;               // share the same colliders
+        r.length = 0f;                                 // not used after instantiation
+
+        // ---------------- transplant points -----------------
+        r.points = segmentPoints;                          // give it the dangling points
+        r.numPoints = segmentPoints.Count;                    // inspector display only
+                                                              // first point of the new piece must NOT stay fixed
+        segmentPoints[0].setPreviousPosition(segmentPoints[0].getPosition());
+
+        // rebuild constraints inside that list
+        r.constraints = new List<Constraint>();
+        for (int i = 0; i < segmentPoints.Count - 1; i++)
+            r.constraints.Add(new Constraint(segmentPoints[i], segmentPoints[i + 1]));
+
+        // ---------------- wire a fresh LineRenderer ----------
+        LineRenderer lr = child.AddComponent<LineRenderer>();
+        lr.material = lineRenderer.material;              // share material for identical look
+        lr.startWidth = lr.endWidth = lineRenderer.startWidth;
+        lr.shadowCastingMode = ShadowCastingMode.On;
+        lr.receiveShadows = true;
+        r.lineRenderer = lr;                                 // hook it up inside the new Rope
+
+    }
+    //------------------------------------------------------------------
+
+
     private void InstantiateSections(int numPoints)
     {
         Vector3 distance_y = new Vector3(0, length / numPoints, 0);
@@ -223,9 +339,17 @@ public class Rope : MonoBehaviour
         for (int i = 0; i < numPoints; i++)
         {
             Vector3 currentPosition = start_position + (distance_y * i);
-            Point newPoint = new Point(currentPosition, currentPosition, i == 0);
-            points.Add(newPoint);
+            Point newPoint = new Point(i, currentPosition, currentPosition, false);
 
+            foreach (PinnableObject p in pinnableObjects)
+            {
+                if (p.getId() == newPoint.getPid())
+                {
+                    newPoint.setObjectPinnedTo(p);
+                    newPoint.Fix(true);
+                } 
+            }
+            points.Add(newPoint);
             if (i > 0)
             {
                 constraints.Add(new Constraint(last_point, newPoint));
