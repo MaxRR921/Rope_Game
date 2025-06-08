@@ -12,7 +12,8 @@ public class Rope : MonoBehaviour
     [SerializeField]
     private float gravity = 10f;
 
-    private bool has_been_cut = false;
+    // Removed the "has_been_cut" field so that each frame we can cut again.
+    // private bool has_been_cut = false;
 
     [SerializeField]
     private int numPoints = 10;
@@ -21,6 +22,8 @@ public class Rope : MonoBehaviour
     private float length;
 
     [SerializeField]
+    private GameObject start_object;
+
     private Vector3 start_position;
 
     private List<Vector3> pointPositions = new List<Vector3>();
@@ -43,33 +46,40 @@ public class Rope : MonoBehaviour
     [SerializeField]
     private List<PinnableObject> pinnableObjects = new List<PinnableObject>();
 
+    // When spawning a child, skip its InstantiateSections call
+    private bool skipInstantiate = false;
+
     void Start()
     {
-        // Initialize LineRenderer
-        // grab or add the LineRenderer
+
+
+        
+        // Initialize or grab existing LineRenderer
         lineRenderer = lineRenderer ?? gameObject.AddComponent<LineRenderer>();
-        lineRenderer.generateLightingData = true;    // gives it normals/tangents for proper lighting
+        lineRenderer.generateLightingData = true;
         lineRenderer.shadowCastingMode = ShadowCastingMode.On;
         lineRenderer.receiveShadows = true;
+        start_position = transform.position;
 
-        // 1) Create a URP Lit material and set it Opaque
+        // Create URP Lit material (Opaque)
         var mat = new Material(Shader.Find("Universal Render Pipeline/Lit"));
-        mat.SetFloat("_Surface", 0);          // 0 = Opaque, 1 = Transparent
-        mat.color = Color.blue;               // your rope color
-
-        // 2) Assign it
+        mat.SetFloat("_Surface", 0);  // 0 = Opaque
+        mat.color = Color.blue;
         lineRenderer.material = mat;
 
-        // 3) Make sure it has real thickness
+
+
+
+        // Thickness
         lineRenderer.startWidth = lineRenderer.endWidth = 0.1f;
 
-        // 4) Enable shadows
-        // Generate rope points and constraints
-        InstantiateSections(numPoints);
+        // Only instantiate sections if this is not a spawned child
+        if (!skipInstantiate)
+        {
+            InstantiateSections(numPoints);
+        }
 
-        // Set LineRenderer positions
         UpdateLineRenderer();
-
         Debug.Log("HELLO!!");
     }
 
@@ -88,9 +98,9 @@ public class Rope : MonoBehaviour
         private bool m_fix;
         private float m_friction;
         private bool m_is_colliding_AABB;
-        private int m_collide_count_AABB; //Counts number of frames the rope has been colliding with something for.
+        private int m_collide_count_AABB;
         private bool m_is_colliding;
-        private int m_collide_count; //Counts number of frames the rope has been colliding with something for.
+        private int m_collide_count;
         private PinnableObject m_object_pinned_to;
 
         public Point(int pid, Vector3 position, Vector3 previous_position, bool fix)
@@ -105,25 +115,23 @@ public class Rope : MonoBehaviour
             m_is_colliding = false;
             m_collide_count = 0;
             m_object_pinned_to = null;
-
         }
         public Vector3 getPosition() => m_position;
         public PinnableObject getObjectPinnedTo => m_object_pinned_to;
-        public void setObjectPinnedTo(PinnableObject object_pinned_to) => m_object_pinned_to = object_pinned_to; 
+        public void setObjectPinnedTo(PinnableObject object_pinned_to) => m_object_pinned_to = object_pinned_to;
         public int getPid() => m_pid;
         public void setPid(int pid) => m_pid = pid;
         public Vector3 getPreviousPosition() => m_previous_position;
         public bool isFix() => m_fix;
-        public void Fix(bool fix) => m_fix = fix;  
+        public void Fix(bool fix) => m_fix = fix;
         public void setPosition(Vector3 position) => m_position = position;
         public void setPreviousPosition(Vector3 position) => m_previous_position = position;
         public void setFriction(float friction) => m_friction = friction;
         public float getFriction() => m_friction;
-        public bool isColliding () => m_is_colliding;
-        public void setIsColliding(bool colliding) => m_is_colliding = colliding; 
+        public bool isColliding() => m_is_colliding;
+        public void setIsColliding(bool colliding) => m_is_colliding = colliding;
         public int getCollideCount() => m_collide_count;
-        public void setCollideCount(int collide_count)=> m_collide_count = collide_count;
-
+        public void setCollideCount(int collide_count) => m_collide_count = collide_count;
     }
 
     [System.Serializable]
@@ -160,7 +168,11 @@ public class Rope : MonoBehaviour
 
     private void Simulate()
     {
-        // Apply Verlet integration
+        // Use a local flag each frame so we can cut once per frame,
+        // but allow future cuts on future frames.
+        bool cutOccurred = false;
+
+        // Verlet integration + collision + cutting
         foreach (Point p in points)
         {
             if (!p.isFix())
@@ -169,24 +181,21 @@ public class Rope : MonoBehaviour
                 Vector3 positionBeforeUpdate = p.getPosition();
                 Vector3 newPosition = positionBeforeUpdate + velocity + Vector3.down * gravity * Time.deltaTime * Time.deltaTime;
 
-
                 p.setFriction(1.0f);
 
-
-                // for every collider in your inspector list:
-                foreach (var col in collisionColliders)
+                foreach (Collider col in collisionColliders)
                 {
-                    // 1) find closest point on that collider’s surface
+
+                    if (!col.enabled)
+                        continue;   // ← this line prevents disabled cutters from ever testing
                     Vector3 closest = col.ClosestPoint(newPosition);
                     Vector3 delta = newPosition - closest;
                     float dist = delta.magnitude;
-
-                    // 2) are we overlapping? (tube of radius ropeThickness)
                     bool colliding = dist < ropeThickness;
 
                     if (colliding)
                     {
-                        // first‐frame vs continuing collision
+                        Debug.Log($"ROPE colliding {this.gameObject.name}");
                         if (!p.isColliding())
                         {
                             p.setIsColliding(true);
@@ -197,38 +206,34 @@ public class Rope : MonoBehaviour
                             p.setCollideCount(p.getCollideCount() + 1);
                         }
 
-                        // exactly the same friction formula you used
                         float newFric = p.getFriction() > 0.4f
                             ? 0.99f - (0.001f * p.getCollideCount())
                             : 0.99f;
                         p.setFriction(newFric);
 
-                        // 3) push the point out to the surface + thickness
                         Vector3 normal = delta / dist;
                         newPosition = closest + normal * ropeThickness;
                     }
-
-                    // — inside the foreach (var col in collisionColliders) —
-                    if (!has_been_cut && colliding && col.CompareTag("Cutter"))
+                    
+                    // If this frame hasn't cut yet, allow a cut
+                    
+                    if (!cutOccurred && colliding && col.CompareTag("Cutter"))
                     {
-                        has_been_cut = true;
 
-                        // 1. drop the cutter from every rope’s query list
-                        collisionColliders.Remove(col);
+                        col.enabled = false;
+                        Debug.Log($"Cutting rope {this.gameObject.name}");
+                        cutOccurred = true;
 
-                        // 2. do the split
+                        
                         int cutIndex = points.IndexOf(p);
                         DecoupleAt(cutIndex);
 
-                        // optional: turn the cutter off so it’s invisible/inactive
                         col.enabled = false;
-
                         Debug.Log($"Decoupled rope at index {cutIndex}");
 
-                        // 3. stop processing this frame ⇒ prevents extra child spawns
+                        // Return so we don't process positions/constraints for this frame
                         return;
                     }
-
                     else
                     {
                         p.setIsColliding(false);
@@ -246,10 +251,8 @@ public class Rope : MonoBehaviour
                 }
             }
         }
-        
 
-
-        // Satisfy constraints
+        // Constraint satisfaction
         for (int i = 0; i < 5; i++)
         {
             foreach (var c in constraints)
@@ -257,12 +260,11 @@ public class Rope : MonoBehaviour
                 Vector3 delta = c.m_pointB.getPosition() - c.m_pointA.getPosition();
                 float distance = delta.magnitude;
                 float difference = (distance - c.m_length) / distance;
-                
+
                 if (!c.m_pointA.isFix())
                 {
                     c.m_pointA.setPosition(c.m_pointA.getPosition() + delta * 0.5f * difference);
                 }
-
                 if (!c.m_pointB.isFix())
                 {
                     c.m_pointB.setPosition(c.m_pointB.getPosition() - delta * 0.5f * difference);
@@ -271,65 +273,63 @@ public class Rope : MonoBehaviour
         }
     }
 
-
     private void DecoupleAt(int index)
     {
-        // sanity check
         if (index < 0 || index >= points.Count - 1) return;
 
-        // ----- upper segment (this Rope) -----
-        // keep points [0 .. index]  (inclusive)
+        // Split points
         List<Point> lowerPoints = points.GetRange(index + 1, points.Count - (index + 1));
         points.RemoveRange(index + 1, points.Count - (index + 1));
 
-        // ditch every constraint that references a removed point
+        // Remove constraints that reference removed points
         constraints.RemoveAll(c => !points.Contains(c.m_pointA) || !points.Contains(c.m_pointB));
 
-        // refresh this renderer so it ends exactly at the cut point
+        // Update this rope's renderer so it ends at the cut
         UpdateLineRenderer();
 
-        // ----- lower segment (new Rope) -----
+        // Spawn a new child rope for the dangling segment
         SpawnChildSegment(lowerPoints);
     }
 
     private void SpawnChildSegment(List<Point> segmentPoints)
     {
-        // create a new GameObject for the dangling part
         GameObject child = new GameObject("RopeSegment");
-        child.transform.parent = transform.parent;               // keep hierarchy tidy
-        child.transform.position = Vector3.zero;                 // local positions are already baked into the points
+        child.transform.parent = transform.parent;
+        child.transform.position = Vector3.zero;
 
         Rope r = child.AddComponent<Rope>();
 
-        // ---------------- copy simple fields ----------------
+        // Prevent the new Rope's Start() from re-instantiating points
+        r.skipInstantiate = true;
+
+        // Copy settings
         r.gravity = gravity;
         r.airFriction = airFriction;
         r.ropeThickness = ropeThickness;
-        r.collisionColliders = collisionColliders;               // share the same colliders
-        r.length = 0f;                                 // not used after instantiation
+        r.collisionColliders = new List<Collider>(collisionColliders);
+        r.length = 0f;
 
-        // ---------------- transplant points -----------------
-        r.points = segmentPoints;                          // give it the dangling points
-        r.numPoints = segmentPoints.Count;                    // inspector display only
-                                                              // first point of the new piece must NOT stay fixed
+        // Provide existing points and rebuild constraints
+        r.points = segmentPoints;
+        r.numPoints = segmentPoints.Count;
         segmentPoints[0].setPreviousPosition(segmentPoints[0].getPosition());
 
-        // rebuild constraints inside that list
         r.constraints = new List<Constraint>();
         for (int i = 0; i < segmentPoints.Count - 1; i++)
+        {
             r.constraints.Add(new Constraint(segmentPoints[i], segmentPoints[i + 1]));
+        }
 
-        // ---------------- wire a fresh LineRenderer ----------
+        // Hook up a new LineRenderer on the child
         LineRenderer lr = child.AddComponent<LineRenderer>();
-        lr.material = lineRenderer.material;              // share material for identical look
+        lr.material = lineRenderer.material;
         lr.startWidth = lr.endWidth = lineRenderer.startWidth;
         lr.shadowCastingMode = ShadowCastingMode.On;
         lr.receiveShadows = true;
-        r.lineRenderer = lr;                                 // hook it up inside the new Rope
-
+        r.lineRenderer = lr;
     }
-    //------------------------------------------------------------------
 
+    //------------------------------------------------------------------
 
     private void InstantiateSections(int numPoints)
     {
@@ -347,8 +347,9 @@ public class Rope : MonoBehaviour
                 {
                     newPoint.setObjectPinnedTo(p);
                     newPoint.Fix(true);
-                } 
+                }
             }
+
             points.Add(newPoint);
             if (i > 0)
             {
@@ -365,10 +366,20 @@ public class Rope : MonoBehaviour
         pointPositions.Clear();
         foreach (var p in points)
         {
-            pointPositions.Add(p.getPosition());
+            Vector3 pos = p.getPosition();
+            // Prevent NaN/Infinity from causing invalid AABB or IsFinite errors:
+            if (!IsValidVector3(pos))
+                pos = Vector3.zero;
+            pointPositions.Add(pos);
         }
-        lineRenderer.positionCount = pointPositions.Count; //linerenderer is faster if i just store them all in array like this, seems dumb but its good.
+
+        lineRenderer.positionCount = pointPositions.Count;
         lineRenderer.SetPositions(pointPositions.ToArray());
     }
 
+    private bool IsValidVector3(Vector3 v)
+    {
+        return !(float.IsNaN(v.x) || float.IsNaN(v.y) || float.IsNaN(v.z) ||
+                 float.IsInfinity(v.x) || float.IsInfinity(v.y) || float.IsInfinity(v.z));
+    }
 }
